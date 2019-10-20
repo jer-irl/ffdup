@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -29,6 +30,12 @@ struct directory_node {
     struct directory_node *parent;
     char name[FILENAME_COMPONENT_LEN + 1];
 };
+
+int filesize_node_comparator(const void *a, const void *b) {
+    const struct filesize_node *a_ptr = *(const struct filesize_node **)a;
+    const struct filesize_node *b_ptr = *(const struct filesize_node **)b;
+    return a_ptr->size < b_ptr->size ? -1 : 1;
+}
 
 void print_dup(const struct duplicate_entry *duplicate_entry) {
     size_t num_elements = 0;
@@ -152,7 +159,34 @@ void handle_directory(struct hashtable_node *hashtable, struct directory_node *r
     closedir(top);
 }
 
-int main(int argc, char **argv) {
+void collect_filesize_nodes(struct hashtable_node *hashtable, uint_fast32_t num_hashtable_nodes,
+                            struct filesize_node ***out_buffer, uint_fast32_t *out_num_filesize_nodes)
+{
+    struct filesize_node **result = malloc(HASHTABLE_BUCKETS * HASHTABLE_BUCKETS * sizeof(struct filesize_node *));
+    uint_fast32_t result_num_nodes = 0;
+    if (result == NULL) {
+        *out_buffer = NULL;
+        return;
+    }
+
+    for (size_t i = 0; i < num_hashtable_nodes; ++i) {
+        struct hashtable_node *hashtable_node = &hashtable[i];
+        while (hashtable_node) {
+            for (size_t j = 0; j < hashtable_node->num_nodes; ++j) {
+                struct filesize_node *filesize_node = &hashtable_node->filesize_nodes[j];
+                result[result_num_nodes++] = filesize_node;
+            }
+
+            hashtable_node = hashtable_node->next;
+        }
+    }
+
+    *out_buffer = result;
+    *out_num_filesize_nodes = result_num_nodes;
+}
+
+int main(int argc, char **argv)
+{
     if (argc != 2) {
         printf("One argument: root file\n");
         return 1;
@@ -179,25 +213,28 @@ int main(int argc, char **argv) {
 
     handle_directory(hashtable, &root_node, argv[1]);
 
-    for (size_t i = 0; i < HASHTABLE_BUCKETS; ++i) {
-        struct hashtable_node *hashtable_node = &hashtable[i];
-        while (hashtable_node) {
-            for (size_t j = 0; j < hashtable_node->num_nodes; ++j) {
-                struct filesize_node *filesize_node = &hashtable_node->filesize_nodes[j];
-                if (filesize_node->num_dups > 1) {
-                    printf("With size %lu:", filesize_node->size);
-                    if (filesize_node->overfull) {
-                        printf(" over %uc duplicates of this size!\n", MAX_TRACKED_DUPLICATES);
-                    } else {
-                        printf("\n");
-                    }
-                    for (size_t k = 0; k < filesize_node->num_dups; ++k) {
-                        print_dup(&filesize_node->dups[k]);
-                    }
-                }
-            }
+    uint_fast32_t num_filesize_entries;
+    struct filesize_node **buffer;
+    collect_filesize_nodes(hashtable, HASHTABLE_BUCKETS, &buffer, &num_filesize_entries);
+    if (buffer == NULL) {
+        printf("Failed to collect entries\n");
+        return 1;
+    }
+    qsort(buffer, num_filesize_entries, sizeof(struct filesize_node *), filesize_node_comparator);
 
-            hashtable_node = hashtable_node->next;
+    for (uint_fast32_t i = 0; i < num_filesize_entries; ++i) {
+        struct filesize_node *filesize_node = buffer[i];
+        if (filesize_node->num_dups > 1) {
+            printf("With size %lu:", filesize_node->size);
+            if (filesize_node->overfull) {
+                printf(" over %uc duplicates of this size!\n", MAX_TRACKED_DUPLICATES);
+            }
+            else {
+                printf("\n");
+            }
+            for (size_t j = 0; j < filesize_node->num_dups; ++j) {
+                print_dup(&filesize_node->dups[j]);
+            }
         }
     }
 
