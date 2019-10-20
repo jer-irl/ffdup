@@ -1,14 +1,14 @@
+#include "build_constants.h"
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <dirent.h>
 #include <sys/stat.h>
 
-#define HASHTABLE_BUCKETS 1024
-
 struct duplicate_entry {
-    char name[256];
+    char name[FILENAME_COMPONENT_LEN + 1];
     struct directory_node *parent;
 };
 
@@ -16,29 +16,33 @@ struct filesize_node {
     bool overfull;
     size_t size;
     unsigned int num_dups;
-    struct duplicate_entry dups[64];
+    struct duplicate_entry dups[MAX_TRACKED_DUPLICATES];
 };
 
 struct hashtable_node {
     size_t num_nodes;
-    struct filesize_node filesize_nodes[16];
+    struct filesize_node filesize_nodes[FILESIZES_PER_HASHTABLE_NODE];
     struct hashtable_node *next;
 };
 
 struct directory_node {
     struct directory_node *parent;
-    char name[256];
+    char name[FILENAME_COMPONENT_LEN + 1];
 };
 
 void print_dup(const struct duplicate_entry *duplicate_entry) {
     size_t num_elements = 0;
-    const char *elements[64];
+    const char *elements[MAX_DIRECTORY_DEPTH];
     elements[num_elements++] = duplicate_entry->name;
 
     struct directory_node *dir = duplicate_entry->parent;
     do {
         elements[num_elements++] = dir->name;
-    } while ((dir = dir->parent));
+    } while ((dir = dir->parent) && num_elements < MAX_DIRECTORY_DEPTH);
+
+    if (num_elements == MAX_DIRECTORY_DEPTH) {
+        printf("File too deeply nested in directory: ");
+    }
 
     for (size_t i = 0; i < num_elements; ++i) {
         const char *element = elements[num_elements - 1 -i];
@@ -81,7 +85,7 @@ void handle_file(struct hashtable_node *hashtable, struct directory_node *parent
     while (true) {
         for (size_t i = 0; i < table_node->num_nodes; ++i) {
             if (table_node->filesize_nodes[i].size == size) {
-                if (table_node->filesize_nodes[i].num_dups == 64) {
+                if (table_node->filesize_nodes[i].num_dups == MAX_TRACKED_DUPLICATES) {
                     if (!table_node->filesize_nodes[i].overfull){
                         printf("Too many dups of size %zu\n", size);
                         table_node->filesize_nodes[i].overfull = true;
@@ -91,7 +95,7 @@ void handle_file(struct hashtable_node *hashtable, struct directory_node *parent
                 size_t dup_idx = table_node->filesize_nodes[i].num_dups++;
                 table_node->filesize_nodes[i].dups[dup_idx].parent = parent_node;
                 const char *base_name = get_base_name(path);
-                strncpy(table_node->filesize_nodes[i].dups[dup_idx].name, base_name, 256);
+                strncpy(table_node->filesize_nodes[i].dups[dup_idx].name, base_name, FILENAME_COMPONENT_LEN);
                 return;
             }
         }
@@ -101,7 +105,7 @@ void handle_file(struct hashtable_node *hashtable, struct directory_node *parent
         table_node = table_node->next;
     }
 
-    if (table_node->num_nodes == 16) {
+    if (table_node->num_nodes == FILESIZES_PER_HASHTABLE_NODE) {
         table_node->next = calloc(1, sizeof(struct hashtable_node));
         table_node = table_node->next;
     }
@@ -183,7 +187,7 @@ int main(int argc, char **argv) {
                 if (filesize_node->num_dups > 1) {
                     printf("With size %lu:", filesize_node->size);
                     if (filesize_node->overfull) {
-                        printf(" over 64 duplicates of this size!\n");
+                        printf(" over %uc duplicates of this size!\n", MAX_TRACKED_DUPLICATES);
                     } else {
                         printf("\n");
                     }
