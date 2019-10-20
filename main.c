@@ -13,6 +13,7 @@ struct duplicate_entry {
 };
 
 struct filesize_node {
+    bool overfull;
     size_t size;
     unsigned int num_dups;
     struct duplicate_entry dups[64];
@@ -39,8 +40,12 @@ void print_dup(const struct duplicate_entry *duplicate_entry) {
         elements[num_elements++] = dir->name;
     } while ((dir = dir->parent));
 
-    for (size_t i = num_elements; i > 0; --i) {
-        printf("/%s", elements[i]);
+    for (size_t i = 0; i < num_elements; ++i) {
+        const char *element = elements[num_elements - 1 -i];
+        if (*element == '/') {
+            ++element;
+        }
+        printf("/%s", element);
     }
     printf("\n");
 }
@@ -76,6 +81,13 @@ void handle_file(struct hashtable_node *hashtable, struct directory_node *parent
     while (true) {
         for (size_t i = 0; i < table_node->num_nodes; ++i) {
             if (table_node->filesize_nodes[i].size == size) {
+                if (table_node->filesize_nodes[i].num_dups == 64) {
+                    if (!table_node->filesize_nodes[i].overfull){
+                        printf("Too many dups of size %zu\n", size);
+                        table_node->filesize_nodes[i].overfull = true;
+                    }
+                    return;
+                }
                 size_t dup_idx = table_node->filesize_nodes[i].num_dups++;
                 table_node->filesize_nodes[i].dups[dup_idx].parent = parent_node;
                 const char *base_name = get_base_name(path);
@@ -93,7 +105,7 @@ void handle_file(struct hashtable_node *hashtable, struct directory_node *parent
         table_node->next = calloc(1, sizeof(struct hashtable_node));
         table_node = table_node->next;
     }
-    
+
     size_t size_idx = table_node->num_nodes++;
     table_node->filesize_nodes[size_idx].size = size;
     table_node->filesize_nodes[size_idx].num_dups = 1;
@@ -169,10 +181,14 @@ int main(int argc, char **argv) {
             for (size_t j = 0; j < hashtable_node->num_nodes; ++j) {
                 struct filesize_node *filesize_node = &hashtable_node->filesize_nodes[j];
                 if (filesize_node->num_dups > 1) {
-                    printf("With size %u: ", filesize_node->num_dups);
+                    printf("With size %lu:", filesize_node->size);
+                    if (filesize_node->overfull) {
+                        printf(" over 64 duplicates of this size!\n");
+                    } else {
+                        printf("\n");
+                    }
                     for (size_t k = 0; k < filesize_node->num_dups; ++k) {
-                        print_dup(&filesize_node->dups[k]); 
-                        printf(";");
+                        print_dup(&filesize_node->dups[k]);
                     }
                 }
             }
